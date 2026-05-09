@@ -18,26 +18,24 @@ import org.springframework.boot.autoconfigure.batch.BatchAutoConfiguration;
         BatchAutoConfiguration.class
 })
 public class JadxMcpServerApplication {
-    
+
     private static final Logger logger = Logger.getLogger(JadxMcpServerApplication.class.getName());
 
     static {
-        // Enable debug logging
         System.setProperty("logging.level.root", "INFO");
         System.setProperty("logging.level.org.springframework", "DEBUG");
         System.setProperty("logging.level.org.springframework.ai.mcp", "DEBUG");
     }
 
     public static void main(String[] args) {
-        logger.info("Starting JADX MCP Server Application...");
-        
+        logger.info("Starting JADX MCP Server Application (Multi-Instance Hub)...");
+
         try {
             SpringApplication app = new SpringApplication(JadxMcpServerApplication.class);
             app.run(args);
-            
+
             logger.info("JADX MCP Server started successfully");
-            
-            // Keep the application running
+
             Thread.currentThread().join();
         } catch (Exception e) {
             logger.severe("Failed to start MCP server: " + e.getMessage());
@@ -47,17 +45,17 @@ public class JadxMcpServerApplication {
     }
 
     @Bean
-    public ToolCallbackProvider jadxTools(JadxToolService jadxService) {
-        logger.info("Registering JADX tools...");
-        ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
-                .toolObjects(jadxService)
-                .build();
-        logger.info("Registered " + provider.getToolCallbacks() + " tool callbacks");
-        return provider;
+    public InstanceManager instanceManager() {
+        return new InstanceManager();
     }
 
     @Bean
-    public JadxApkAnalyzerAPI jadxApkAnalyzerAPI() {
-        return new JadxApkAnalyzerAPI();
+    public ToolCallbackProvider jadxTools(JadxToolService jadxService) {
+        logger.info("Registering JADX tools (multi-instance hub)...");
+        ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
+                .toolObjects(jadxService)
+                .build();
+        logger.info("Registered tool callbacks: " + provider.getToolCallbacks());
+        return provider;
     }
 }

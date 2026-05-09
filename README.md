@@ -1,296 +1,167 @@
-# JADX MCP Server
+# JADX Multi-Instance Hub
 
-A **Pure-Java** Model Context Protocol (MCP) server that provides Android APK reverse engineering capabilities using JADX (Java Android Decompiler). This server enables AI assistants like Claude to analyze APK files, decompile code, extract components, and perform security assessments on Android applications.
+A **Pure-Java** MCP server for JADX with **multi-instance hub** support — load and analyze multiple APKs simultaneously from a single MCP connection, inspired by [IDA Pro MCP](https://github.com/mrexodia/ida-pro-mcp)'s hub architecture.
 
-## 🚀 Pure-Java Implementation
+> Fork of [Qtty/jadx-mcp-server](https://github.com/Qtty/jadx-mcp-server), enhanced with multi-instance target routing.
 
-**No external dependencies or plugins required!** This implementation is entirely self-contained:
-- ✅ **Zero additional plugins** - Everything runs in pure Java
-- ✅ **No native libraries** - Cross-platform compatibility guaranteed  
-- ✅ **Single JAR deployment** - One file contains everything you need
-- ✅ **No system modifications** - Works with any Java 11+ installation
-- ✅ **Portable** - Run anywhere Java runs (Windows, macOS, Linux)
+## Features
 
-## Overview
+- **Multi-Instance Hub** — Load multiple APKs at once, route queries via `target` parameter
+- **Zero GUI Required** — JADX as library, no need to open any JADX-GUI window
+- **Single JAR Deployment** — One process manages all APK instances
+- **Target Routing** — `select_target`, `list_instances`, per-tool `target` parameter (like IDA MCP)
+- **Pure Java** — No native dependencies, runs on any Java 17+ platform
 
-This project implements an MCP server that wraps the powerful JADX decompiler, making Android APK analysis accessible through standardized MCP tools. It's designed for security researchers, developers, and analysts who need to reverse engineer Android applications programmatically.
+## Quick Comparison
 
-### Key Features
+| Feature | jadx-mcp-server (original) | **jadx-multi-instance-hub** | jadx-ai-mcp (zinja) |
+|---------|---------------------------|----------------------------|---------------------|
+| Multi-APK | No | **Yes** | No |
+| Needs GUI | No | **No** | Yes (JADX-GUI) |
+| Hub mode | No | **Yes** | No |
+| Target routing | No | **Yes** | No |
 
-- **APK Loading & Analysis**: Load and analyze APK files for detailed inspection
-- **Code Decompilation**: Get decompiled Java source code from DEX bytecode
-- **Class & Method Inspection**: Browse classes, methods, and fields
-- **Component Extraction**: Extract exported components from AndroidManifest.xml
-- **Method Search**: Search for specific methods across all classes
-- **Manifest Analysis**: Parse and analyze AndroidManifest.xml content
-- **Main Activity Detection**: Identify the application's entry point
-- **Resource File Analysis**: Access and analyze APK resource files (layouts, strings, etc.)
-- **Bytecode Analysis**: Extract smali (bytecode) representations for low-level analysis
-- **MCP Integration**: Seamless integration with AI assistants through MCP protocol
+## Installation
 
-## Architecture
-
-The project follows a layered architecture:
-
-- **MCP Layer** (`JadxToolService`): Exposes JADX functionality as MCP tools
-- **API Layer** (`JadxApkAnalyzerAPI`): Clean API interface for APK analysis
-- **Core Layer** (`JadxAnalyzerCore`): Core JADX integration and analysis logic
-- **CLI Layer** (`JadxApkAnalyzerCLI`): Interactive command-line interface
-- **Model Layer**: Data structures for components and call graphs
-
-## Prerequisites
-
-- **Java 11** or higher
-- **Maven 3.6+** for building
-- **JADX dependencies** (automatically handled by Maven)
-
-## Installation & Setup
-
-### 1. Clone the Repository
+### Build
 
 ```bash
-git clone <repository-url>
-cd jadx-mcp-server
+# Requires Java 17+ and Maven 3.6+
+mvn clean package -DskipTests
 ```
 
-### 2. Build the Project
-
-Use the provided build script:
+### Configure Claude Code
 
 ```bash
-chmod +x build.sh
-./build.sh
+claude mcp add jadx-hub "D:\Program Files\Java\jdk-17.0.10\bin\java.exe" -- -jar "D:\path\to\jadx-mcp-server\target\jadx-mcp-server-1.0.0.jar"
 ```
 
-Or build manually with Maven:
-
-```bash
-mvn clean package
-```
-
-The build process creates a fat JAR with all dependencies: `target/jadx-mcp-server-1.0.0-jar-with-dependencies.jar`
-
-### 3. Configure Claude Desktop
-
-Add the MCP server to your Claude Desktop configuration (`claude_desktop_config.json`):
+Or manually add to your Claude config:
 
 ```json
 {
-  "mcpServers": {
-    "jadx-analyzer": {
-      "command": "java",
-      "args": [
-        "-Dspring.ai.mcp.server.stdio=true",
-        "-jar",
-        "/path/to/jadx-mcp-server/target/jadx-mcp-server-1.0.0.jar"
-      ]
-    }
+  "jadx-hub": {
+    "type": "stdio",
+    "command": "java",
+    "args": ["-jar", "/path/to/jadx-mcp-server-1.0.0.jar"]
   }
 }
 ```
 
-Replace `/path/to/jadx-mcp-server` with the actual path to your project directory.
+## Usage
 
-## Available MCP Tools
-
-Once running, the server provides these MCP tools:
-
-### Core Analysis Tools
-
-- **`load_apk`** - Load and analyze an APK file
-- **`get_all_classes`** - Get list of all classes in the APK
-- **`get_class_source`** - Get decompiled source code of a specific class
-- **`get_methods_of_class`** - Get list of methods in a specific class
-- **`get_fields_of_class`** - Get list of fields in a specific class
-
-### Method Analysis Tools
-
-- **`get_method_by_name`** - Get source code of a specific method
-- **`search_method_by_name`** - Search for methods across all classes
-
-### Component Analysis Tools
-
-- **`get_exported_components`** - Get exported components from AndroidManifest.xml
-- **`get_android_manifest`** - Get the AndroidManifest.xml content
-- **`get_main_activity_class`** - Get the main launcher activity class
-
-### Resource Analysis Tools
-
-- **`get_all_resource_file_names`** - Get list of all resource file names in the APK
-- **`get_resource_file`** - Get content of a specific resource file (XML layouts, strings, etc.)
-
-### Bytecode Analysis Tools
-
-- **`get_smali_of_class`** - Get smali (bytecode) representation of a specific class
-- **`get_smali_of_method`** - Get smali (bytecode) representation of a specific method
-
-## Demo
-
-https://github.com/user-attachments/assets/9c93c16a-5f42-4d57-a4a2-87975735bd91
-
-*JADX MCP Server in action analyzing Android APKs with Claude*
-
-## Usage Examples
-
-### Basic APK Analysis with Claude
-
-1. **Load an APK**:
-   ```
-   Please analyze this APK file: /path/to/app.apk
-   ```
-   
-   *Note: A test APK (DIVA) is available in the `misc/` directory for testing purposes.*
-
-2. **Examine Classes**:
-   ```
-   Show me all the classes in the loaded APK
-   ```
-
-3. **Get Source Code**:
-   ```
-   Get the source code for the MainActivity class
-   ```
-
-4. **Security Analysis**:
-   ```
-   Check for exported components and potential security issues
-   ```
-
-5. **Resource Analysis**:
-   ```
-   Show me all resource files in the APK and get the content of strings.xml
-   ```
-
-6. **Bytecode Analysis**:
-   ```
-   Get the smali bytecode for the MainActivity class to analyze low-level implementation
-   ```
-
-### Command Line Testing
-
-Test the functionality with the provided test script:
-
-```bash
-chmod +x test.sh
-./test.sh /path/to/your/app.apk
-```
-
-Available test modes:
-- `core` - Test core functionality
-- `api` - Test API functionality  
-- `cli` - Test CLI interface (interactive)
-- `compat` - Test backward compatibility
-- `all` - Test all non-interactive components (default)
-- `interactive` - Test all components including CLI
-- `suite` - Run comprehensive test suite
-
-## Project Structure
+### Load Multiple APKs
 
 ```
-jadx-mcp-server/
-├── src/main/java/com/example/jadxmcpserver/
-│   ├── JadxMcpServerApplication.java    # Spring Boot application entry point
-│   ├── JadxToolService.java             # MCP tool definitions
-│   ├── JadxApkAnalyzerAPI.java         # Clean API interface
-│   ├── JadxApkAnalyzer.java            # Legacy compatibility wrapper
-│   ├── cli/
-│   │   └── JadxApkAnalyzerCLI.java     # Interactive CLI interface
-│   ├── core/
-│   │   └── JadxAnalyzerCore.java       # Core JADX integration
-│   └── model/
-│       ├── CallGraphNode.java          # Call graph data structure
-│       └── ExportedComponent.java      # Component data structure
-├── src/main/resources/
-│   └── application.properties          # Spring configuration
-├── src/test/                          # Comprehensive test suite
-├── build.sh                           # Build script
-├── test.sh                            # Testing script
-├── claude_desktop_config.json         # Claude Desktop config template
-└── pom.xml                            # Maven configuration
+load_apk("D:/apks/app_v1.apk", "app-v1")
+load_apk("D:/apks/app_v2.apk", "app-v2")
 ```
 
-## Configuration
+### Query with Target Routing
 
-### Spring Boot Configuration
+```
+# Query specific instance
+get_class_source("com.example.MainActivity", "app-v1")
+get_class_source("com.example.MainActivity", "app-v2")
 
-The application uses Spring Boot with MCP server capabilities. Key configurations in `application.properties`:
-
-- Runs as non-web application
-- Disables console logging for STDIO transport
-- Logs to `/tmp/jadx-mcp-server.log`
-
-### JADX Configuration
-
-JADX is configured with:
-- Java 11 compatibility
-- Full decompilation including resources
-- Error handling for corrupted APKs
-
-## Development
-
-### Adding New Tools
-
-1. Add method to `JadxToolService` with `@Tool` annotation
-2. Implement functionality in `JadxApkAnalyzerAPI`
-3. Add core logic to `JadxAnalyzerCore`
-4. Update tests in the test suite
-
-### Testing
-
-Run the comprehensive test suite:
-
-```bash
-./test.sh /path/to/test.apk suite
+# Use default target (auto-selected when only one instance, or set manually)
+select_target("app-v2")
+get_class_source("com.example.MainActivity")
 ```
 
-Individual test components can be run separately for focused testing.
+### Manage Instances
 
-## Security Considerations
-
-This tool is designed for **defensive security analysis only**:
-
-- ✅ Vulnerability assessment
-- ✅ Security research
-- ✅ Code review and analysis
-- ✅ Malware analysis (defensive)
-- ✅ Bytecode analysis for security auditing
-- ✅ Resource file inspection for hardcoded secrets
-- ❌ Creating malicious modifications
-- ❌ Bypassing security controls
-- ❌ Unauthorized application modification
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Java Version**: Ensure Java 11+ is installed and `JAVA_HOME` is set
-2. **Memory Issues**: Large APKs may require additional JVM memory: `-Xmx4g`
-3. **Path Issues**: Use absolute paths in Claude Desktop configuration
-4. **Permission Issues**: Ensure the APK file is readable
-
-### Debug Logging
-
-Enable debug logging by modifying `application.properties`:
-
-```properties
-logging.level.root=DEBUG
-logging.level.org.springframework.ai.mcp=TRACE
 ```
+list_instances()        # Show all loaded APKs
+current_target()        # Show current default
+select_target("app-v1") # Switch default
+remove_instance("app-v1") # Unload APK
+```
+
+## MCP Tools
+
+### Instance Management (5 tools)
+
+| Tool | Description |
+|------|-------------|
+| `load_apk` | Load APK with a named instance ID |
+| `list_instances` | List all loaded instances |
+| `select_target` | Set default target instance |
+| `current_target` | Show current default target |
+| `remove_instance` | Close and remove an instance |
+
+### Analysis Tools (13 tools, all support `target` parameter)
+
+| Tool | Description |
+|------|-------------|
+| `get_all_classes` | List all classes |
+| `get_class_source` | Decompiled Java source |
+| `get_methods_of_class` | List methods |
+| `get_fields_of_class` | List fields |
+| `get_method_by_name` | Method source code |
+| `search_method_by_name` | Search methods across classes |
+| `get_exported_components` | Exported Android components |
+| `get_android_manifest` | AndroidManifest.xml |
+| `get_main_activity_class` | Main launcher activity |
+| `get_all_resource_file_names` | Resource file listing |
+| `get_resource_file` | Resource file content |
+| `get_smali_of_class` | Smali bytecode (class) |
+| `get_smali_of_method` | Smali bytecode (method) |
+
+## Target Routing Logic
+
+- **1 instance loaded** — auto-selects, no `target` needed
+- **Multiple instances, default set** — uses default
+- **Multiple instances, no default** — error prompts you to `select_target`
+- **Explicit `target` parameter** — always uses specified instance
+
+## Architecture
+
+```
+Claude Code / AI Client
+        |
+        | MCP (stdio)
+        v
++-------------------+
+|  JadxToolService  |  <-- 18 MCP tools with target routing
++-------------------+
+        |
++-------------------+
+|  InstanceManager  |  <-- Map<instanceId, JadxApkAnalyzerAPI>
++-------------------+
+    /       \
+   v         v
+[app-v1]  [app-v2]   <-- Independent JadxDecompiler instances
+```
+
+## Use Case: APK Version Diffing
+
+Perfect for comparing obfuscated code across app versions:
+
+```
+load_apk("app_v23.60.apk", "old")
+load_apk("app_v23.64.apk", "new")
+
+# Compare same class across versions
+get_class_source("com.example.Security", "old")
+get_class_source("com.example.Security", "new")
+
+# Search for renamed/obfuscated methods
+search_method_by_name("sendReport", "old")
+search_method_by_name("sendReport", "new")  # Gone? Check obfuscation
+```
+
+## Requirements
+
+- Java 17+
+- Maven 3.6+ (build only)
+
+## Credits
+
+- [Qtty/jadx-mcp-server](https://github.com/Qtty/jadx-mcp-server) — Original single-instance implementation
+- [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) — Hub architecture inspiration
+- [skylot/jadx](https://github.com/skylot/jadx) — JADX decompiler engine
 
 ## License
 
-This project uses JADX library which is licensed under Apache License 2.0. Please refer to JADX documentation for usage terms and conditions.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
-
-## Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review JADX documentation
-3. Submit an issue with detailed information including Java version, APK details, and error messages
+Apache License 2.0 (same as JADX)

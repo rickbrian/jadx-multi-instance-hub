@@ -12,7 +12,7 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class JadxRestController {
 
-    @Autowired
+    @Autowired(required = false)
     private JadxApkAnalyzerAPI jadxAPI;
 
     @PostMapping("/load-apk")
