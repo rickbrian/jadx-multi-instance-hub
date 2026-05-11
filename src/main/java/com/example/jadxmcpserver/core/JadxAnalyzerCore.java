@@ -36,12 +36,18 @@ import java.util.regex.Matcher;
  * - String and code search functionality
  */
 public class JadxAnalyzerCore {
-    
+
     private JadxDecompiler jadx;
     private String apkPath;
     private List<ExportedComponent> exportedComponents;
     private String manifestContent;
     private String packageName;
+
+    private Map<String, JavaClass> classIndex = new HashMap<>();
+    private Map<String, Set<String>> methodIndex = new HashMap<>();
+
+    private static final java.util.logging.Logger logger =
+        java.util.logging.Logger.getLogger(JadxAnalyzerCore.class.getName());
     
     public JadxAnalyzerCore(String apkPath) {
         this.apkPath = apkPath;
@@ -71,7 +77,10 @@ public class JadxAnalyzerCore {
         try {
             jadx = new JadxDecompiler(jadxArgs);
             jadx.load();
-            
+
+            // Build indexes
+            buildIndexes();
+
             // Load manifest
             loadManifest();
             
@@ -183,10 +192,9 @@ public class JadxAnalyzerCore {
      * Get full source code of a given class
      */
     public String getClassSource(String className) {
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                return javaClass.getCode();
-            }
+        JavaClass javaClass = classIndex.get(className);
+        if (javaClass != null) {
+            return javaClass.getCode();
         }
         return null;
     }
@@ -240,16 +248,12 @@ public class JadxAnalyzerCore {
      */
     public List<String> getMethodsOfClass(String className) {
         List<String> methods = new ArrayList<>();
-        
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                for (JavaMethod method : javaClass.getMethods()) {
-                    methods.add(method.getFullName());
-                }
-                break;
+        JavaClass javaClass = classIndex.get(className);
+        if (javaClass != null) {
+            for (JavaMethod method : javaClass.getMethods()) {
+                methods.add(method.getFullName());
             }
         }
-        
         return methods;
     }
     
@@ -258,16 +262,12 @@ public class JadxAnalyzerCore {
      */
     public List<String> getFieldsOfClass(String className) {
         List<String> fields = new ArrayList<>();
-        
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                for (JavaField field : javaClass.getFields()) {
-                    fields.add(field.getType() + " " + field.getName());
-                }
-                break;
+        JavaClass javaClass = classIndex.get(className);
+        if (javaClass != null) {
+            for (JavaField field : javaClass.getFields()) {
+                fields.add(field.getType() + " " + field.getName());
             }
         }
-        
         return fields;
     }
     
@@ -289,22 +289,26 @@ public class JadxAnalyzerCore {
      */
     public Map<String, List<String>> searchMethodByName(String methodName) {
         Map<String, List<String>> results = new HashMap<>();
-        
-        for (JavaClass javaClass : jadx.getClasses()) {
-            List<String> methods = new ArrayList<>();
-            
-            for (JavaMethod method : javaClass.getMethods()) {
-                if (method.getName().equals(methodName) || 
-                    method.getName().contains(methodName)) {
-                    methods.add(method.getFullName());
+
+        for (Map.Entry<String, Set<String>> entry : methodIndex.entrySet()) {
+            String name = entry.getKey();
+            if (name.equals(methodName) || name.contains(methodName)) {
+                for (String className : entry.getValue()) {
+                    JavaClass javaClass = classIndex.get(className);
+                    if (javaClass == null) continue;
+                    List<String> methods = new ArrayList<>();
+                    for (JavaMethod method : javaClass.getMethods()) {
+                        if (method.getName().equals(name)) {
+                            methods.add(method.getFullName());
+                        }
+                    }
+                    if (!methods.isEmpty()) {
+                        results.computeIfAbsent(className, k -> new ArrayList<>()).addAll(methods);
+                    }
                 }
             }
-            
-            if (!methods.isEmpty()) {
-                results.put(javaClass.getFullName(), methods);
-            }
         }
-        
+
         return results;
     }
     
@@ -406,7 +410,26 @@ public class JadxAnalyzerCore {
     }
     
     // Private helper methods
-    
+
+    private void buildIndexes() {
+        classIndex.clear();
+        methodIndex.clear();
+        List<JavaClass> allClasses = jadx.getClasses();
+        logger.info("Building indexes for " + allClasses.size() + " classes...");
+        int count = 0;
+        for (JavaClass javaClass : allClasses) {
+            classIndex.put(javaClass.getFullName(), javaClass);
+            for (JavaMethod method : javaClass.getMethods()) {
+                methodIndex.computeIfAbsent(method.getName(), k -> new HashSet<>())
+                           .add(javaClass.getFullName());
+            }
+            count++;
+            if (count % 10000 == 0) {
+                logger.info("Indexed " + count + "/" + allClasses.size() + " classes");
+            }
+        }
+        logger.info("Index complete: " + classIndex.size() + " classes, " + methodIndex.size() + " unique method names");
+    }
     private void extractPackageName() {
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -448,12 +471,7 @@ public class JadxAnalyzerCore {
     }
     
     private JavaClass findClass(String className) {
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                return javaClass;
-            }
-        }
-        return null;
+        return classIndex.get(className);
     }
     
     private String extractMethodCode(String classCode, String methodName) {
@@ -825,17 +843,14 @@ public class JadxAnalyzerCore {
      */
     public String getSmaliOfClass(String className) {
         checkLoaded();
-        
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                try {
-                    return javaClass.getSmali();
-                } catch (Exception e) {
-                    throw new RuntimeException("Error getting smali for class: " + className + " - " + e.getMessage(), e);
-                }
+        JavaClass javaClass = classIndex.get(className);
+        if (javaClass != null) {
+            try {
+                return javaClass.getSmali();
+            } catch (Exception e) {
+                throw new RuntimeException("Error getting smali for class: " + className + " - " + e.getMessage(), e);
             }
         }
-        
         return null;
     }
     
@@ -844,22 +859,58 @@ public class JadxAnalyzerCore {
      */
     public String getSmaliOfMethod(String className, String methodName) {
         checkLoaded();
-        
-        for (JavaClass javaClass : jadx.getClasses()) {
-            if (javaClass.getFullName().equals(className)) {
-                try {
-                    String classSmali = javaClass.getSmali();
-                    if (classSmali != null) {
-                        return extractMethodSmali(classSmali, methodName);
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException("Error getting smali for method: " + methodName + " in class: " + className + " - " + e.getMessage(), e);
+        JavaClass javaClass = classIndex.get(className);
+        if (javaClass != null) {
+            try {
+                String classSmali = javaClass.getSmali();
+                if (classSmali != null) {
+                    return extractMethodSmali(classSmali, methodName);
                 }
-                break;
+            } catch (Exception e) {
+                throw new RuntimeException("Error getting smali for method: " + methodName + " in class: " + className + " - " + e.getMessage(), e);
             }
         }
-        
         return null;
+    }
+
+    /**
+     * Search for a string in decompiled source code of classes matching a package filter.
+     * If packageFilter is null or empty, searches all classes (slow for large APKs).
+     */
+    public Map<String, List<String>> searchString(String keyword, String packageFilter) {
+        checkLoaded();
+        Map<String, List<String>> results = new LinkedHashMap<>();
+        int searched = 0;
+
+        for (Map.Entry<String, JavaClass> entry : classIndex.entrySet()) {
+            String className = entry.getKey();
+            if (packageFilter != null && !packageFilter.isEmpty() && !className.startsWith(packageFilter)) {
+                continue;
+            }
+            searched++;
+            try {
+                String code = entry.getValue().getCode();
+                if (code != null && code.contains(keyword)) {
+                    List<String> matchLines = new ArrayList<>();
+                    String[] lines = code.split("\n");
+                    for (int i = 0; i < lines.length; i++) {
+                        if (lines[i].contains(keyword)) {
+                            matchLines.add((i + 1) + ": " + lines[i].trim());
+                        }
+                    }
+                    if (!matchLines.isEmpty()) {
+                        results.put(className, matchLines);
+                    }
+                }
+            } catch (Exception e) {
+                // skip classes that fail to decompile
+            }
+            if (searched % 5000 == 0) {
+                logger.info("searchString: searched " + searched + " classes...");
+            }
+        }
+        logger.info("searchString: done, searched " + searched + " classes, found " + results.size() + " matches");
+        return results;
     }
 
     /**

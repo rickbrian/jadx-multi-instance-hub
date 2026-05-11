@@ -194,4 +194,14 @@ public class JadxToolService {
             return "Error: " + e.getMessage();
         }
     }
+
+    @Tool(name = "search_string", description = "Search for a string/keyword in decompiled source code. packageFilter (optional) limits search to a package prefix (e.g. 'com.mobikwik_new'). target: instance ID (optional)")
+    public Map<String, List<String>> searchString(String keyword, String packageFilter, String target) {
+        try {
+            JadxApkAnalyzerAPI analyzer = instanceManager.resolve(target);
+            return analyzer.searchString(keyword, packageFilter);
+        } catch (Exception e) {
+            return Map.of("error", List.of(e.getMessage()));
+        }
+    }
 }

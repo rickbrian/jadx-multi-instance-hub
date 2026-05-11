@@ -231,6 +231,18 @@ public class JadxApkAnalyzerAPI {
         }
     }
     
+    /**
+     * Search for a string in decompiled source code
+     */
+    public Map<String, List<String>> searchString(String keyword, String packageFilter) throws Exception {
+        checkLoaded();
+        try {
+            return core.searchString(keyword, packageFilter);
+        } catch (RuntimeException e) {
+            throw new Exception(e.getMessage(), e);
+        }
+    }
+
     private void checkLoaded() throws Exception {
         if (core == null || !core.isLoaded()) {
             throw new Exception("No APK loaded. Call loadApk() first.");
