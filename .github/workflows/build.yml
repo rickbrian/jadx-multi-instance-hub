@@ -31,18 +31,17 @@ jobs:
           path: target/jadx-mcp-server-*.jar
           if-no-files-found: error
 
-      - name: Move latest tag to current commit
-        run: |
-          git tag -f latest
-          git push -f origin latest
-
-      - name: Update latest release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest Build
-          files: target/jadx-mcp-server-*.jar
-          prerelease: true
-          make_latest: true
+      - name: Delete old latest release
+        run: gh release delete latest --yes --cleanup-tag || true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create latest release
+        run: |
+          gh release create latest target/jadx-mcp-server-*.jar \
+            --title "Latest Build" \
+            --notes "Auto-built from \`${{ github.sha }}\`" \
+            --prerelease \
+            --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
