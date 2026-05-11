@@ -31,6 +31,11 @@ jobs:
           path: target/jadx-mcp-server-*.jar
           if-no-files-found: error
 
+      - name: Move latest tag to current commit
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
       - name: Update latest release
         uses: softprops/action-gh-release@v2
         with:
