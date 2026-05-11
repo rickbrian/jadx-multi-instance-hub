@@ -41,7 +41,6 @@ jobs:
           gh release create latest target/jadx-mcp-server-*.jar \
             --title "Latest Build" \
             --notes "Auto-built from \`${{ github.sha }}\`" \
-            --prerelease \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
