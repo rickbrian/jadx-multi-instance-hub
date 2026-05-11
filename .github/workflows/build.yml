@@ -14,11 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '17'
           distribution: 'temurin'
+          cache: maven
 
       - name: Build with Maven
         run: mvn clean package -DskipTests
@@ -27,14 +28,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jadx-mcp-server
-          path: target/jadx-mcp-server-1.0.0.jar
+          path: target/jadx-mcp-server-*.jar
+          if-no-files-found: error
 
       - name: Update latest release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest Build
-          files: target/jadx-mcp-server-1.0.0.jar
+          files: target/jadx-mcp-server-*.jar
           prerelease: true
           make_latest: true
         env:

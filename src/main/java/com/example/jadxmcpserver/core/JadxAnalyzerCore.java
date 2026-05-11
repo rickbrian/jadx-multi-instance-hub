@@ -9,6 +9,8 @@ import jadx.api.JavaMethod;
 import jadx.api.JavaField;
 import jadx.api.ResourceFile;
 import jadx.api.ICodeInfo;
+import jadx.core.dex.nodes.ClassNode;
+import jadx.core.dex.nodes.MethodNode;
 import jadx.core.xmlgen.ResContainer;
 import jadx.zip.IZipEntry;
 
@@ -45,7 +47,6 @@ public class JadxAnalyzerCore {
 
     private Map<String, JavaClass> classIndex = new HashMap<>();
     private Map<String, Set<String>> methodIndex = new HashMap<>();
-    private volatile boolean methodIndexBuilt = false;
 
     private static final java.util.logging.Logger logger =
         java.util.logging.Logger.getLogger(JadxAnalyzerCore.class.getName());
@@ -74,6 +75,7 @@ public class JadxAnalyzerCore {
         jadxArgs.setDeobfuscationOn(true);
         jadxArgs.setDeobfuscationMinLength(2);
         jadxArgs.setDeobfuscationMaxLength(64);
+        jadxArgs.setShowInconsistentCode(true);
         
         try {
             jadx = new JadxDecompiler(jadxArgs);
@@ -289,7 +291,6 @@ public class JadxAnalyzerCore {
      * Search for methods by name across all classes
      */
     public Map<String, List<String>> searchMethodByName(String methodName) {
-        ensureMethodIndex();
         Map<String, List<String>> results = new HashMap<>();
 
         for (Map.Entry<String, Set<String>> entry : methodIndex.entrySet()) {
@@ -416,35 +417,29 @@ public class JadxAnalyzerCore {
     private void buildIndexes() {
         classIndex.clear();
         methodIndex.clear();
-        methodIndexBuilt = false;
         List<JavaClass> allClasses = jadx.getClasses();
-        logger.info("Building class index for " + allClasses.size() + " classes...");
+        logger.info("Building indexes for " + allClasses.size() + " classes...");
+        int count = 0;
         for (JavaClass javaClass : allClasses) {
             classIndex.put(javaClass.getFullName(), javaClass);
-        }
-        logger.info("Class index complete: " + classIndex.size() + " classes");
-    }
-
-    private synchronized void ensureMethodIndex() {
-        if (methodIndexBuilt) return;
-        logger.info("Building method index (first search, one-time cost)...");
-        int count = 0;
-        for (Map.Entry<String, JavaClass> entry : classIndex.entrySet()) {
             try {
-                for (JavaMethod method : entry.getValue().getMethods()) {
-                    methodIndex.computeIfAbsent(method.getName(), k -> new HashSet<>())
-                               .add(entry.getKey());
+                ClassNode clsNode = javaClass.getClassNode();
+                for (MethodNode mth : clsNode.getMethods()) {
+                    String mthName = mth.getMethodInfo().getName();
+                    if (!mthName.equals("<init>") && !mthName.equals("<clinit>")) {
+                        methodIndex.computeIfAbsent(mthName, k -> new HashSet<>())
+                                   .add(javaClass.getFullName());
+                    }
                 }
             } catch (Exception e) {
                 // skip classes that fail
             }
             count++;
             if (count % 10000 == 0) {
-                logger.info("Method index: " + count + "/" + classIndex.size());
+                logger.info("Indexed " + count + "/" + allClasses.size() + " classes");
             }
         }
-        methodIndexBuilt = true;
-        logger.info("Method index complete: " + methodIndex.size() + " unique method names");
+        logger.info("Index complete: " + classIndex.size() + " classes, " + methodIndex.size() + " unique method names");
     }
     private void extractPackageName() {
         try {
