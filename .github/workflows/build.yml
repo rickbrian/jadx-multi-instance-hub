@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,8 +23,19 @@ jobs:
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
-      - name: Upload JAR
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: jadx-mcp-server
           path: target/jadx-mcp-server-1.0.0.jar
+
+      - name: Update latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          files: target/jadx-mcp-server-1.0.0.jar
+          prerelease: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
