@@ -25,10 +25,18 @@ jobs:
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
+      - name: Get tag message
+        id: tag_msg
+        run: |
+          git fetch --tags --force
+          echo 'body<<EOF' >> $GITHUB_OUTPUT
+          git tag -l --format='%(contents:body)' ${GITHUB_REF_NAME} >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: target/jadx-mcp-server-*.jar
-          generate_release_notes: true
+          body: ${{ steps.tag_msg.outputs.body }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

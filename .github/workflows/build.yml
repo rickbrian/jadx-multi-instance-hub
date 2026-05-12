@@ -36,11 +36,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Get commit message
+        id: commit_msg
+        run: |
+          echo 'body<<EOF' >> $GITHUB_OUTPUT
+          git log -1 --pretty=%B >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
       - name: Create latest release
         run: |
           gh release create latest target/jadx-mcp-server-*.jar \
             --title "Latest Build" \
-            --notes "Auto-built from \`${{ github.sha }}\`" \
+            --notes "${{ steps.commit_msg.outputs.body }}" \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
