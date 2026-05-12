@@ -10,6 +10,9 @@ A **Pure-Java** MCP server for JADX with **multi-instance hub** support — load
 - **Zero GUI Required** — JADX as library, no need to open any JADX-GUI window
 - **Single JAR Deployment** — One process manages all APK instances
 - **Target Routing** — `select_target`, `list_instances`, per-tool `target` parameter (like IDA MCP)
+- **DEX String Search** — Instant string search via direct DEX bytecode scanning, zero decompilation
+- **Background Decompilation** — Auto pre-decompiles all classes after load, subsequent queries become instant
+- **Search Optimization** — DEX pool pre-check, auto package filter, timeout/pagination protection
 - **Pure Java** — No native dependencies, runs on any Java 17+ platform
 
 ## Quick Comparison
@@ -84,13 +87,13 @@ remove_instance("app-v1") # Unload APK
 
 | Tool | Description |
 |------|-------------|
-| `load_apk` | Load APK with a named instance ID |
+| `load_apk` | Load APK with a named instance ID. Starts background decompilation automatically |
 | `list_instances` | List all loaded instances |
 | `select_target` | Set default target instance |
 | `current_target` | Show current default target |
 | `remove_instance` | Close and remove an instance |
 
-### Analysis Tools (13 tools, all support `target` parameter)
+### Analysis Tools (16 tools, all support `target` parameter)
 
 | Tool | Description |
 |------|-------------|
@@ -100,6 +103,9 @@ remove_instance("app-v1") # Unload APK
 | `get_fields_of_class` | List fields |
 | `get_method_by_name` | Method source code |
 | `search_method_by_name` | Search methods across classes |
+| `search_string` | Search string in decompiled source (with timeout/pagination) |
+| `search_dex_strings` | **Instant** DEX string pool search with class+method locations (no decompilation) |
+| `decompile_status` | Background decompilation progress (progress/total/percent/eta) |
 | `get_exported_components` | Exported Android components |
 | `get_android_manifest` | AndroidManifest.xml |
 | `get_main_activity_class` | Main launcher activity |
@@ -107,6 +113,15 @@ remove_instance("app-v1") # Unload APK
 | `get_resource_file` | Resource file content |
 | `get_smali_of_class` | Smali bytecode (class) |
 | `get_smali_of_method` | Smali bytecode (method) |
+
+### Performance (MobiKwik 46k classes)
+
+| Operation | Time |
+|-----------|------|
+| `search_dex_strings("keyword")` | **180ms** (zero decompilation) |
+| `search_string` (auto package filter) | **276ms** (after background decompile) |
+| `search_string` (all 46k classes) | **422ms** (after background decompile) |
+| String not in APK | **0ms** (DEX pool pre-check) |
 
 ## Target Routing Logic
 
@@ -123,7 +138,7 @@ Claude Code / AI Client
         | MCP (stdio)
         v
 +-------------------+
-|  JadxToolService  |  <-- 18 MCP tools with target routing
+|  JadxToolService  |  <-- 21 MCP tools with target routing
 +-------------------+
         |
 +-------------------+
@@ -155,6 +170,21 @@ search_method_by_name("sendReport", "new")  # Gone? Check obfuscation
 
 - Java 17+
 - Maven 3.6+ (build only)
+
+## CLI Test Mode
+
+Test performance without starting the MCP server:
+
+```bash
+# Load APK + search DEX strings
+java -jar jadx-mcp-server-1.0.0.jar --test "app.apk" "keyword"
+
+# Watch background decompilation progress
+java -jar jadx-mcp-server-1.0.0.jar --test "app.apk" --bg-decompile
+
+# Full decompile benchmark
+java -jar jadx-mcp-server-1.0.0.jar --test "app.apk" --full-decompile
+```
 
 ## Credits
 
