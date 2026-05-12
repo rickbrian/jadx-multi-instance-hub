@@ -36,18 +36,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get commit message
-        id: commit_msg
+      - name: Extract latest changelog
+        id: changelog
         run: |
           echo 'body<<EOF' >> $GITHUB_OUTPUT
-          git log -1 --pretty=%B >> $GITHUB_OUTPUT
+          sed -n '/^## /{p; :a; n; /^## /q; p; ba}' CHANGELOG.md >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
 
       - name: Create latest release
         run: |
           gh release create latest target/jadx-mcp-server-*.jar \
             --title "Latest Build" \
-            --notes "${{ steps.commit_msg.outputs.body }}" \
+            --notes "${{ steps.changelog.outputs.body }}" \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
