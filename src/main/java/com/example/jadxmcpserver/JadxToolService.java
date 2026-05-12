@@ -18,11 +18,14 @@ public class JadxToolService {
 
     // ===== Instance Management Tools =====
 
-    @Tool(name = "load_apk", description = "Load an APK file. instanceId is a short name for this target (e.g. 'mobikwik', 'paytm')")
+    @Tool(name = "load_apk", description = "Load an APK file. Starts background decompilation automatically. instanceId is a short name for this target (e.g. 'mobikwik', 'paytm')")
     public Map<String, Object> loadApk(String apkPath, String instanceId) {
         try {
             logger.info("Loading APK: " + apkPath + " as instance: " + instanceId);
-            return instanceManager.loadInstance(instanceId, apkPath);
+            Map<String, Object> info = instanceManager.loadInstance(instanceId, apkPath);
+            Map<String, Object> result = new LinkedHashMap<>(info);
+            result.put("backgroundDecompile", "started");
+            return result;
         } catch (Exception e) {
             logger.severe("Error loading APK: " + e.getMessage());
             return Map.of("error", e.getMessage());
@@ -195,13 +198,42 @@ public class JadxToolService {
         }
     }
 
-    @Tool(name = "search_string", description = "Search for a string/keyword in decompiled source code. packageFilter (optional) limits search to a package prefix (e.g. 'com.mobikwik_new'). target: instance ID (optional)")
-    public Map<String, List<String>> searchString(String keyword, String packageFilter, String target) {
+    @Tool(name = "search_string", description = "Search for a string in decompiled source code with class and line info. When packageFilter is empty, auto-filters to the app's main package for speed. Pass packageFilter='*' to search ALL classes (slow for large APKs). timeoutMs: max search time in ms (default 30000). maxResults: max matching classes to return (default 50, 0 for unlimited). target: instance ID (optional)")
+    public Map<String, List<String>> searchString(String keyword, String packageFilter,
+                                                    Integer timeoutMs, Integer maxResults, String target) {
         try {
             JadxApkAnalyzerAPI analyzer = instanceManager.resolve(target);
-            return analyzer.searchString(keyword, packageFilter);
+            int timeout = (timeoutMs != null && timeoutMs > 0) ? timeoutMs : 30000;
+            int max = (maxResults != null) ? maxResults : 50;
+            return analyzer.searchString(keyword, packageFilter, timeout, max);
         } catch (Exception e) {
             return Map.of("error", List.of(e.getMessage()));
+        }
+    }
+
+    @Tool(name = "search_dex_strings", description = "Fast search in DEX string constant pools (instant, no decompilation). Returns matching strings from all DEX files with class+method locations from bytecode scanning. keyword: string to search for. limit: max results (default 100, 0 for all). target: instance ID (optional)")
+    public Map<String, Object> searchDexStrings(String keyword, Integer limit, String target) {
+        try {
+            JadxApkAnalyzerAPI analyzer = instanceManager.resolve(target);
+            int effectiveLimit = (limit != null && limit > 0) ? limit : 100;
+            List<Map<String, Object>> matches = analyzer.searchDexStrings(keyword, effectiveLimit);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("keyword", keyword);
+            result.put("matchCount", matches.size());
+            result.put("matches", matches);
+            return result;
+        } catch (Exception e) {
+            return Map.of("error", e.getMessage());
+        }
+    }
+
+    @Tool(name = "decompile_status", description = "Get background decompilation progress. Shows how many classes have been decompiled. After load_apk, decompilation runs in the background — use this to check progress. target: instance ID (optional)")
+    public Map<String, Object> decompileStatus(String target) {
+        try {
+            JadxApkAnalyzerAPI analyzer = instanceManager.resolve(target);
+            return analyzer.getDecompileStatus();
+        } catch (Exception e) {
+            return Map.of("error", e.getMessage());
         }
     }
 }

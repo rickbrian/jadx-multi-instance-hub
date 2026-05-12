@@ -23,10 +23,17 @@ import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
 import java.io.File;
+import java.io.InputStream;
 import java.io.StringReader;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
  * Core JADX APK Analyzer - Provides analysis functionality without UI
@@ -47,6 +54,18 @@ public class JadxAnalyzerCore {
 
     private Map<String, JavaClass> classIndex = new HashMap<>();
     private Map<String, Set<String>> methodIndex = new HashMap<>();
+    private Set<String> dexStringPool = new HashSet<>();
+    private Map<String, Set<String>> dexStringRefs = new HashMap<>();
+    private Map<String, String> loadTimings = new HashMap<>();
+
+    // Background decompilation
+    private ExecutorService decompileExecutor;
+    private final AtomicInteger decompileProgress = new AtomicInteger(0);
+    private final AtomicInteger decompileTotal = new AtomicInteger(0);
+    private final AtomicInteger decompileFailed = new AtomicInteger(0);
+    private volatile boolean decompileDone = false;
+    private volatile boolean decompileCancelled = false;
+    private volatile long decompileStartTime = 0;
 
     private static final java.util.logging.Logger logger =
         java.util.logging.Logger.getLogger(JadxAnalyzerCore.class.getName());
@@ -78,15 +97,35 @@ public class JadxAnalyzerCore {
         jadxArgs.setShowInconsistentCode(true);
         
         try {
+            long t0 = System.currentTimeMillis();
             jadx = new JadxDecompiler(jadxArgs);
             jadx.load();
+            long t1 = System.currentTimeMillis();
+
+            // Build DEX string pool (fast, direct DEX parsing, no decompilation)
+            buildDexStringPool();
+            long t2 = System.currentTimeMillis();
 
             // Build indexes
             buildIndexes();
+            long t3 = System.currentTimeMillis();
 
             // Load manifest
             loadManifest();
-            
+            long t4 = System.currentTimeMillis();
+
+            loadTimings = Map.of(
+                "jadx.load", (t1 - t0) + "ms",
+                "dexStringPool", (t2 - t1) + "ms",
+                "buildIndexes", (t3 - t2) + "ms",
+                "loadManifest", (t4 - t3) + "ms",
+                "total", (t4 - t0) + "ms"
+            );
+            logger.info("Load timings: " + loadTimings);
+
+            // Start background decompilation
+            startBackgroundDecompile();
+
             return true;
         } catch (Exception e) {
             throw new RuntimeException("Error loading APK: " + e.getMessage(), e);
@@ -103,6 +142,7 @@ public class JadxAnalyzerCore {
         info.put("totalClasses", jadx != null ? jadx.getClasses().size() : 0);
         info.put("exportedComponents", exportedComponents != null ? exportedComponents.size() : 0);
         info.put("mainActivity", getMainActivityClass());
+        info.put("loadTimings", loadTimings);
         return info;
     }
     
@@ -440,6 +480,288 @@ public class JadxAnalyzerCore {
             }
         }
         logger.info("Index complete: " + classIndex.size() + " classes, " + methodIndex.size() + " unique method names");
+    }
+
+    private void startBackgroundDecompile() {
+        stopBackgroundDecompile();
+
+        // Order: main package first, then the rest
+        List<JavaClass> ordered = new ArrayList<>();
+        List<JavaClass> rest = new ArrayList<>();
+        for (JavaClass cls : classIndex.values()) {
+            if (packageName != null && cls.getFullName().startsWith(packageName)) {
+                ordered.add(cls);
+            } else {
+                rest.add(cls);
+            }
+        }
+        ordered.addAll(rest);
+
+        decompileTotal.set(ordered.size());
+        decompileProgress.set(0);
+        decompileFailed.set(0);
+        decompileDone = false;
+        decompileCancelled = false;
+        decompileStartTime = System.currentTimeMillis();
+
+        decompileExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "bg-decompile");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        });
+
+        decompileExecutor.submit(() -> {
+            int total = ordered.size();
+            logger.info("Background decompile started: " + total + " classes");
+            for (int i = 0; i < total; i++) {
+                if (decompileCancelled || Thread.currentThread().isInterrupted()) break;
+                try {
+                    ordered.get(i).getCode();
+                } catch (Exception e) {
+                    decompileFailed.incrementAndGet();
+                }
+                decompileProgress.incrementAndGet();
+                if ((i + 1) % 5000 == 0) {
+                    logger.info("Background decompile: " + (i + 1) + "/" + total);
+                }
+            }
+            decompileDone = true;
+            long elapsed = System.currentTimeMillis() - decompileStartTime;
+            logger.info("Background decompile done: " + decompileProgress.get() + "/" + total
+                    + ", failed=" + decompileFailed.get() + ", time=" + elapsed + "ms");
+        });
+    }
+
+    private void stopBackgroundDecompile() {
+        decompileCancelled = true;
+        if (decompileExecutor != null) {
+            decompileExecutor.shutdownNow();
+            try {
+                decompileExecutor.awaitTermination(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            decompileExecutor = null;
+        }
+    }
+
+    public Map<String, Object> getDecompileStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        int progress = decompileProgress.get();
+        int total = decompileTotal.get();
+        int failed = decompileFailed.get();
+        status.put("progress", progress);
+        status.put("total", total);
+        status.put("failed", failed);
+        status.put("done", decompileDone);
+        if (total > 0) {
+            status.put("percent", String.format("%.1f%%", progress * 100.0 / total));
+        }
+        if (progress > 0 && !decompileDone) {
+            long elapsed = System.currentTimeMillis() - decompileStartTime;
+            long eta = (elapsed / progress) * (total - progress);
+            status.put("eta", (eta / 1000) + "s");
+        }
+        return status;
+    }
+
+    private void buildDexStringPool() {
+        dexStringPool.clear();
+        dexStringRefs.clear();
+        long start = System.currentTimeMillis();
+        try (ZipFile zip = new ZipFile(apkPath)) {
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (name.matches("classes\\d*\\.dex")) {
+                    try (InputStream is = zip.getInputStream(entry)) {
+                        byte[] dexData = is.readAllBytes();
+                        parseDexFile(dexData);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to build DEX string pool: " + e.getMessage());
+        }
+        long elapsed = System.currentTimeMillis() - start;
+        logger.info("DEX index: " + dexStringPool.size() + " pool strings, "
+                + dexStringRefs.size() + " referenced strings in " + elapsed + "ms");
+    }
+
+    private void parseDexFile(byte[] dex) {
+        if (dex.length < 0x70) return;
+        if (dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x' || dex[3] != '\n') return;
+
+        ByteBuffer buf = ByteBuffer.wrap(dex).order(ByteOrder.LITTLE_ENDIAN);
+
+        // 1. string_ids → string values
+        int stringIdsSize = buf.getInt(0x38);
+        int stringIdsOff = buf.getInt(0x3C);
+        if (stringIdsSize < 0 || stringIdsSize > dex.length / 4) return;
+        if (stringIdsOff < 0 || stringIdsOff + (long) stringIdsSize * 4 > dex.length) return;
+        String[] strings = new String[stringIdsSize];
+        for (int i = 0; i < stringIdsSize; i++) {
+            int off = buf.getInt(stringIdsOff + i * 4);
+            if (off >= 0 && off < dex.length) {
+                strings[i] = readMutf8(dex, off);
+            }
+        }
+        for (String s : strings) {
+            if (s != null && s.length() > 1) {
+                dexStringPool.add(s);
+            }
+        }
+
+        // 2. type_ids → type descriptors
+        int typeIdsSize = buf.getInt(0x40);
+        int typeIdsOff = buf.getInt(0x44);
+        if (typeIdsSize < 0 || typeIdsSize > dex.length / 4) return;
+        if (typeIdsOff < 0 || typeIdsOff + (long) typeIdsSize * 4 > dex.length) return;
+        String[] typeDescs = new String[typeIdsSize];
+        for (int i = 0; i < typeIdsSize; i++) {
+            int descIdx = buf.getInt(typeIdsOff + i * 4);
+            if (descIdx >= 0 && descIdx < stringIdsSize) {
+                typeDescs[i] = strings[descIdx];
+            }
+        }
+
+        // 3. method_ids → class type index + method name
+        int methodIdsSize = buf.getInt(0x58);
+        int methodIdsOff = buf.getInt(0x5C);
+        if (methodIdsSize < 0 || methodIdsSize > dex.length / 8) return;
+        if (methodIdsOff < 0 || methodIdsOff + (long) methodIdsSize * 8 > dex.length) return;
+        int[] methodClassIdx = new int[methodIdsSize];
+        int[] methodNameIdx = new int[methodIdsSize];
+        for (int i = 0; i < methodIdsSize; i++) {
+            int base = methodIdsOff + i * 8;
+            methodClassIdx[i] = buf.getShort(base) & 0xFFFF;
+            methodNameIdx[i] = buf.getInt(base + 4);
+        }
+
+        // 4. class_defs → class_data → code_items → scan const-string
+        int classDefsSize = buf.getInt(0x60);
+        int classDefsOff = buf.getInt(0x64);
+        if (classDefsSize < 0 || classDefsSize > dex.length / 32) return;
+        if (classDefsOff < 0 || classDefsOff + (long) classDefsSize * 32 > dex.length) return;
+
+        for (int c = 0; c < classDefsSize; c++) {
+            int defBase = classDefsOff + c * 32;
+            if (defBase + 32 > dex.length) break;
+            int classIdx = buf.getInt(defBase);
+            int classDataOff = buf.getInt(defBase + 24);
+            if (classDataOff == 0 || classDataOff < 0 || classDataOff >= dex.length) continue;
+
+            String className = (classIdx >= 0 && classIdx < typeIdsSize)
+                    ? dexTypeToClassName(typeDescs[classIdx]) : null;
+            if (className == null) continue;
+
+            int[] pos = {classDataOff};
+            int staticFieldsSize = readUleb128(dex, pos);
+            int instanceFieldsSize = readUleb128(dex, pos);
+            int directMethodsSize = readUleb128(dex, pos);
+            int virtualMethodsSize = readUleb128(dex, pos);
+
+            if (staticFieldsSize < 0 || instanceFieldsSize < 0
+                    || directMethodsSize < 0 || virtualMethodsSize < 0) continue;
+
+            // skip encoded_field entries (2 ULEB128 each)
+            for (int f = 0; f < staticFieldsSize + instanceFieldsSize; f++) {
+                readUleb128(dex, pos);
+                readUleb128(dex, pos);
+                if (pos[0] >= dex.length) break;
+            }
+
+            // scan direct methods
+            scanEncodedMethods(dex, buf, pos, directMethodsSize,
+                    strings, stringIdsSize, methodClassIdx, methodNameIdx, methodIdsSize, className);
+            // scan virtual methods
+            scanEncodedMethods(dex, buf, pos, virtualMethodsSize,
+                    strings, stringIdsSize, methodClassIdx, methodNameIdx, methodIdsSize, className);
+        }
+    }
+
+    private void scanEncodedMethods(byte[] dex, ByteBuffer buf, int[] pos, int count,
+                                     String[] strings, int stringIdsSize,
+                                     int[] methodClassIdx, int[] methodNameIdx, int methodIdsSize,
+                                     String className) {
+        int methodIdx = 0;
+        for (int m = 0; m < count; m++) {
+            if (pos[0] >= dex.length) break;
+            int diff = readUleb128(dex, pos);
+            readUleb128(dex, pos); // access_flags
+            int codeOff = readUleb128(dex, pos);
+            methodIdx += diff;
+
+            if (codeOff == 0) continue;
+            if (methodIdx < 0 || methodIdx >= methodIdsSize) continue;
+            if (codeOff + 16 > dex.length) continue;
+
+            String methodName = (methodNameIdx[methodIdx] >= 0 && methodNameIdx[methodIdx] < stringIdsSize)
+                    ? strings[methodNameIdx[methodIdx]] : null;
+            if (methodName == null) continue;
+
+            int insnsSize = buf.getInt(codeOff + 12);
+            int insnsOff = codeOff + 16;
+            if (insnsSize <= 0 || insnsOff + (long) insnsSize * 2 > dex.length) continue;
+
+            String ref = className + "." + methodName;
+
+            for (int i = 0; i < insnsSize; i++) {
+                int insn = buf.getShort(insnsOff + i * 2) & 0xFFFF;
+                int opcode = insn & 0xFF;
+
+                if (opcode == 0x1a && i + 1 < insnsSize) {
+                    int strIdx = buf.getShort(insnsOff + (i + 1) * 2) & 0xFFFF;
+                    if (strIdx < stringIdsSize && strings[strIdx] != null) {
+                        dexStringRefs.computeIfAbsent(strings[strIdx], k -> new LinkedHashSet<>())
+                                .add(ref);
+                    }
+                } else if (opcode == 0x1b && i + 2 < insnsSize) {
+                    int lo = buf.getShort(insnsOff + (i + 1) * 2) & 0xFFFF;
+                    int hi = buf.getShort(insnsOff + (i + 2) * 2) & 0xFFFF;
+                    int strIdx = lo | (hi << 16);
+                    if (strIdx >= 0 && strIdx < stringIdsSize && strings[strIdx] != null) {
+                        dexStringRefs.computeIfAbsent(strings[strIdx], k -> new LinkedHashSet<>())
+                                .add(ref);
+                    }
+                }
+            }
+        }
+    }
+
+    private static int readUleb128(byte[] data, int[] pos) {
+        int result = 0;
+        int shift = 0;
+        while (pos[0] < data.length && shift < 35) {
+            int b = data[pos[0]++] & 0xFF;
+            result |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+        }
+        return result;
+    }
+
+    private static String dexTypeToClassName(String descriptor) {
+        if (descriptor == null || descriptor.length() < 3 || descriptor.charAt(0) != 'L') return null;
+        return descriptor.substring(1, descriptor.length() - 1).replace('/', '.');
+    }
+
+    private static String readMutf8(byte[] data, int offset) {
+        int pos = offset;
+        while (pos < data.length && (data[pos] & 0x80) != 0) pos++;
+        if (pos >= data.length) return null;
+        pos++;
+
+        int start = pos;
+        while (pos < data.length && data[pos] != 0) pos++;
+
+        try {
+            return new String(data, start, pos - start, "UTF-8");
+        } catch (Exception e) {
+            return null;
+        }
     }
     private void extractPackageName() {
         try {
@@ -834,10 +1156,11 @@ public class JadxAnalyzerCore {
                     // Try using getZipEntry first
                     IZipEntry zipEntry = resource.getZipEntry();
                     if (zipEntry != null) {
-                        // Read data directly from zip entry
-                        byte[] data = zipEntry.getInputStream().readAllBytes();
-                        if (data != null) {
-                            return new String(data, "UTF-8");
+                        try (InputStream ris = zipEntry.getInputStream()) {
+                            byte[] data = ris.readAllBytes();
+                            if (data != null) {
+                                return new String(data, "UTF-8");
+                            }
                         }
                     }
                 } catch (Exception e) {
@@ -885,20 +1208,111 @@ public class JadxAnalyzerCore {
     }
 
     /**
-     * Search for a string in decompiled source code of classes matching a package filter.
-     * If packageFilter is null or empty, searches all classes (slow for large APKs).
+     * Fast search in DEX string constant pools with bytecode-level class+method location.
+     * No decompilation needed — scans const-string instructions directly.
+     */
+    public List<Map<String, Object>> searchDexStrings(String keyword, int limit) {
+        checkLoaded();
+        List<Map.Entry<String, Set<String>>> matches = new ArrayList<>();
+        for (String s : dexStringPool) {
+            if (s.contains(keyword)) {
+                Set<String> refs = dexStringRefs.getOrDefault(s, Collections.emptySet());
+                matches.add(Map.entry(s, refs));
+            }
+        }
+        matches.sort(Comparator.comparing(Map.Entry::getKey));
+        if (limit > 0 && matches.size() > limit) {
+            matches = matches.subList(0, limit);
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map.Entry<String, Set<String>> entry : matches) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("string", entry.getKey());
+            item.put("references", new ArrayList<>(entry.getValue()));
+            result.add(item);
+        }
+        return result;
+    }
+
+    /**
+     * Search for a string in decompiled source code.
+     * Optimized: checks DEX string pool first, auto-filters by manifest package when no filter provided.
+     * Pass packageFilter="*" to force searching all classes.
      */
     public Map<String, List<String>> searchString(String keyword, String packageFilter) {
+        return searchString(keyword, packageFilter, 30000, 50);
+    }
+
+    public Map<String, List<String>> searchString(String keyword, String packageFilter,
+                                                    int timeoutMs, int maxResults) {
         checkLoaded();
+        long startTime = System.currentTimeMillis();
+
+        // Fast path: check DEX string pool first
+        if (!dexStringPool.isEmpty()) {
+            boolean found = false;
+            for (String s : dexStringPool) {
+                if (s.contains(keyword)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                logger.info("searchString: '" + keyword + "' not in DEX string pool, skipping decompilation");
+                Map<String, List<String>> empty = new LinkedHashMap<>();
+                empty.put("@searchMeta", List.of("searched=0, total=0, truncated=false, timeMs=0"));
+                return empty;
+            }
+        }
+
+        // Determine effective filter
+        String effectiveFilter;
+        if ("*".equals(packageFilter)) {
+            effectiveFilter = null;
+            logger.info("searchString: explicit wildcard, searching ALL classes");
+        } else if (packageFilter != null && !packageFilter.isEmpty()) {
+            effectiveFilter = packageFilter;
+        } else if (packageName != null && !packageName.isEmpty()) {
+            effectiveFilter = packageName;
+            logger.info("searchString: no packageFilter, auto-using: " + effectiveFilter);
+        } else {
+            effectiveFilter = null;
+        }
+
+        // Count total classes to search
+        int totalToSearch = 0;
+        for (String className : classIndex.keySet()) {
+            if (effectiveFilter == null || className.startsWith(effectiveFilter)) {
+                totalToSearch++;
+            }
+        }
+
         Map<String, List<String>> results = new LinkedHashMap<>();
         int searched = 0;
+        boolean truncated = false;
+        String truncateReason = null;
 
         for (Map.Entry<String, JavaClass> entry : classIndex.entrySet()) {
             String className = entry.getKey();
-            if (packageFilter != null && !packageFilter.isEmpty() && !className.startsWith(packageFilter)) {
+            if (effectiveFilter != null && !className.startsWith(effectiveFilter)) {
                 continue;
             }
             searched++;
+
+            // Check timeout
+            if (timeoutMs > 0 && (System.currentTimeMillis() - startTime) > timeoutMs) {
+                truncated = true;
+                truncateReason = "timeout(" + timeoutMs + "ms)";
+                break;
+            }
+            // Check max results
+            if (maxResults > 0 && results.size() >= maxResults) {
+                truncated = true;
+                truncateReason = "maxResults(" + maxResults + ")";
+                break;
+            }
+
             try {
                 String code = entry.getValue().getCode();
                 if (code != null && code.contains(keyword)) {
@@ -917,10 +1331,23 @@ public class JadxAnalyzerCore {
                 // skip classes that fail to decompile
             }
             if (searched % 5000 == 0) {
-                logger.info("searchString: searched " + searched + " classes...");
+                logger.info("searchString: searched " + searched + "/" + totalToSearch + " classes...");
             }
         }
-        logger.info("searchString: done, searched " + searched + " classes, found " + results.size() + " matches");
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        logger.info("searchString: done, searched " + searched + "/" + totalToSearch
+                + ", found " + results.size() + " matches, time=" + elapsed + "ms"
+                + (truncated ? ", truncated=" + truncateReason : ""));
+
+        // Add meta info
+        String meta = "searched=" + searched + ", total=" + totalToSearch
+                + ", found=" + results.size()
+                + ", truncated=" + truncated
+                + (truncateReason != null ? ", reason=" + truncateReason : "")
+                + ", timeMs=" + elapsed;
+        results.put("@searchMeta", List.of(meta));
+
         return results;
     }
 
@@ -928,13 +1355,15 @@ public class JadxAnalyzerCore {
      * Close the analyzer and free resources
      */
     public void close() {
+        stopBackgroundDecompile();
         if (jadx != null) {
             try {
                 jadx.close();
             } catch (Exception e) {
-                // Log error but don't throw
                 System.err.println("Error closing JADX: " + e.getMessage());
             }
         }
+        dexStringPool.clear();
+        dexStringRefs.clear();
     }
 }

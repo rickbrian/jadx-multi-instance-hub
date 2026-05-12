@@ -230,17 +230,42 @@ public class JadxApkAnalyzerAPI {
             throw new Exception(e.getMessage(), e);
         }
     }
-    
+
     /**
      * Search for a string in decompiled source code
      */
     public Map<String, List<String>> searchString(String keyword, String packageFilter) throws Exception {
+        return searchString(keyword, packageFilter, 30000, 50);
+    }
+
+    public Map<String, List<String>> searchString(String keyword, String packageFilter,
+                                                    int timeoutMs, int maxResults) throws Exception {
         checkLoaded();
         try {
-            return core.searchString(keyword, packageFilter);
+            return core.searchString(keyword, packageFilter, timeoutMs, maxResults);
         } catch (RuntimeException e) {
             throw new Exception(e.getMessage(), e);
         }
+    }
+
+    /**
+     * Fast search in DEX string constant pools with class+method locations (no decompilation)
+     */
+    public List<Map<String, Object>> searchDexStrings(String keyword, int limit) throws Exception {
+        checkLoaded();
+        try {
+            return core.searchDexStrings(keyword, limit);
+        } catch (RuntimeException e) {
+            throw new Exception(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Get background decompilation progress
+     */
+    public Map<String, Object> getDecompileStatus() throws Exception {
+        checkLoaded();
+        return core.getDecompileStatus();
     }
 
     private void checkLoaded() throws Exception {

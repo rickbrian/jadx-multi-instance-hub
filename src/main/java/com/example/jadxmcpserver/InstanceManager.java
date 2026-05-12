@@ -1,5 +1,6 @@
 package com.example.jadxmcpserver;
 
+import jakarta.annotation.PreDestroy;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,6 +30,7 @@ public class InstanceManager {
     }
 
     public void removeInstance(String instanceId) {
+        if (instanceId == null) return;
         JadxApkAnalyzerAPI analyzer = instances.remove(instanceId);
         apkPaths.remove(instanceId);
         if (analyzer != null) {
@@ -88,5 +90,16 @@ public class InstanceManager {
 
     public boolean isEmpty() {
         return instances.isEmpty();
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        for (String id : new ArrayList<>(instances.keySet())) {
+            try {
+                removeInstance(id);
+            } catch (Exception e) {
+                // best-effort cleanup
+            }
+        }
     }
 }
